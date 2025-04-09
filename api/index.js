@@ -1,30 +1,43 @@
 export default async function handler(req, res) {
-    const GAS_BASE_URL = 'https://script.google.com/macros/s/AKfycbzytkmMVhU_55XMSH984SA8LeohUYY1WDgqF3O4ENt6eyPPoAVHet-9mK3vsGUf3MeOUg/exec';
-  
-    const url = new URL(GAS_BASE_URL);
-    if (req.method === 'GET') {
-      for (const key in req.query) {
-        url.searchParams.append(key, req.query[key]);
-      }
-    }
-  
+  const GAS_URL = process.env.GAS_URL;
+
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(204).end(); // No content
+    return;
+  }
+
+  if (req.method === 'GET' || req.method === 'POST') {
     const fetchOptions = {
       method: req.method,
       headers: {
         'Content-Type': 'application/json',
       },
     };
-  
+
     if (req.method === 'POST') {
       fetchOptions.body = JSON.stringify(req.body);
     }
-  
+
+    const url = req.method === 'GET' && req.query
+      ? `${GAS_URL}?${new URLSearchParams(req.query)}`
+      : GAS_URL;
+
     try {
-      const gasResponse = await fetch(url.toString(), fetchOptions);
-      const data = await gasResponse.json();
+      const response = await fetch(url, fetchOptions);
+      const data = await response.json();
+
       res.setHeader('Access-Control-Allow-Origin', '*');
-      return res.status(200).json(data);
-    } catch (err) {
-      return res.status(500).json({ error: 'Proxy request failed', detail: err.message });
+      res.setHeader('Content-Type', 'application/json');
+      res.status(200).json(data);
+    } catch (error) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.status(500).json({ error: 'Proxy request failed', details: error.message });
     }
-  }  
+  } else {
+    res.setHeader('Allow', ['GET', 'POST', 'OPTIONS']);
+    res.status(405).end(`Method ${req.method} Not Allowed`);
+  }
+}
