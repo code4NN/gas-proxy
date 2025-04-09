@@ -1,16 +1,14 @@
 {
     "version": 2,
-    "functions": {
-      "api/proxy.js": {
-        "methods": ["GET", "POST", "OPTIONS"]
-      }
-    },
     "routes": [
-      {
-        "src": "/api/proxy",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "dest": "/api/proxy.js"
-      }
+        {
+            "src": "/api/proxy",
+            "methods": [
+                "GET",
+                "POST",
+                "OPTIONS"
+            ],
+            "dest": "/api/proxy.js"
+        }
     ]
-  }
-  
+}
