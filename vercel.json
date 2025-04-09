@@ -1,6 +1,13 @@
 {
   "routes": [
     {
+      "src": "^/$",
+      "status": 308,
+      "headers": {
+        "Location": "/api/proxy"
+      }
+    },
+    {
       "src": "/api/proxy",
       "methods": [
         "GET",
