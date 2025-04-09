@@ -1,11 +1,13 @@
 {
-    "version": 2,
-    "routes": [
-      {
-        "src": "/api/proxy",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "dest": "/api/index.js"
-      }
-    ]
-  }
-  
+  "routes": [
+    {
+      "src": "/api/proxy",
+      "methods": [
+        "GET",
+        "POST",
+        "OPTIONS"
+      ],
+      "dest": "api/index.js"
+    }
+  ]
+}
