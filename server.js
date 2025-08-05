@@ -12,6 +12,11 @@ app.use(cors());
 
 app.use(express.json());
 
+app.get('/pong', (req, res) => {
+    console.log("I am alive")
+    res.send('pong');
+});
+
 // 🔐 Protect all /api routes
 app.use('/api', requireToken, dataRoutes);
 
