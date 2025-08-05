@@ -21,6 +21,10 @@ function columnNumberToLetter(colNum) {
     return letter;
 }
 
+router.get("/ping", async (req, res) =>{
+    res.status(200).send('pong')
+})
+
 // GET /api/data?sheet=xyz&last_col=F&last_sync=timestamp
 router.get('/data', async (req, res) => {
     console.log("called /api/data... ")
