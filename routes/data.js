@@ -2,6 +2,7 @@ import express from 'express';
 import { google } from 'googleapis';
 import { getNextAuth } from '../lib/serviceAccountPool.js';
 import { getSheetId } from '../lib/sheetMap.js';
+import { getCache, setCache } from '../cache.js';
 
 const router = express.Router();
 
@@ -21,46 +22,123 @@ function columnNumberToLetter(colNum) {
     return letter;
 }
 
-router.get("/ping", async (req, res) =>{
+function get_db_id(workbook, sheet_name) {
+    return `${workbook}_${sheet_name}`
+}
+
+router.get("/pong", async (req, res) => {
     res.status(200).send('pong')
 })
 
-// GET /api/data?sheet=xyz&last_col=F&last_sync=timestamp
-router.get('/data', async (req, res) => {
-    console.log("called /api/data... ")
+
+// GET
+// -----------------must have
+// workbook
+// sheet
+// -----------------optional
+// last_sync: UNIX timestamp returns full sheet if empty or older than 20 updates
+// 
+router.get('/db/get', async (req, res) => {
+    console.log("called /api/db/get................................................... ")
     try {
-        const { workbook, sheet, last_col_number, last_sync } = req.query;
+        const { workbook, sheet, last_sync } = req.query;
         if (!workbook) return res.status(400).json({ error: 'Missing workbook alias' });
         if (!sheet) { return res.status(400).json({ error: 'Missing sheet alias' }); }
-        if (!last_col_number) return res.status(400).json({ error: 'Missing last_col' });
 
+        // ======================= get sheets_auth
         const spreadsheetId = getSheetId(workbook);
         const { auth, tokenUsed } = getAuthWithDebug();
         const sheets = google.sheets({ version: 'v4', auth });
-        const latest_n_changes = 20;
+        // ======================= get sheets_auth END
 
-        const last_col_number_int = parseInt(last_col_number, 10)
-        const db_start_col = columnNumberToLetter(last_col_number_int + 2)
-        const db_end_col = columnNumberToLetter(last_col_number_int + 1 + last_col_number_int)
-        const range = `${sheet}!${db_start_col}1:${db_end_col}${latest_n_changes}`;
+        // additional flags
+        let is_cached_colnum = true;
+        let is_cached_sheetdata = true;
+        let is_fullfetch = false;
+        let all_synced = false;
 
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId,
-            range,
-        });
 
-        // Later we can filter based on `last_sync`
-        res.json({ data: response.data.values, tokenUsed });
+        const cid_last_col = `${get_db_id(workbook, sheet)}_last_col`
+        let last_col_number = getCache(cid_last_col);
+
+        if (!last_col_number) {
+            console.log(`fetching ${cid_last_col}`)
+            const response = await sheets.spreadsheets.values.get({
+                spreadsheetId,
+                range: `${sheet}!1:1`
+            });
+            const firstRow = response.data.values[0];
+            const firstBlankIndex = firstRow.findIndex(cell => !cell || cell.trim() === "");
+            setCache(cid_last_col, firstBlankIndex)
+            last_col_number = firstBlankIndex;
+
+            is_cached_colnum = false;
+        }
+
+
+        // FETCHER-1 Logic to fetch latest 20 changes from sheet
+        const cid_sheetdata = `${workbook}_${sheet}_data`
+        let response = getCache(cid_sheetdata)
+
+        if (!response) {
+            console.log(`fetching ${cid_sheetdata}`)
+            const latest_n_changes = 20;
+            const last_col_number_int = parseInt(last_col_number, 10)
+
+            const db_start_col = columnNumberToLetter(last_col_number_int + 2)
+            const db_end_col = columnNumberToLetter(last_col_number_int + 1 + last_col_number_int)
+            const range = `${sheet}!${db_start_col}1:${db_end_col}${latest_n_changes}`;
+
+            response = await sheets.spreadsheets.values.get({
+                spreadsheetId,
+                range,
+            });
+            response = response.data.values;
+
+            setCache(cid_sheetdata, response)
+            is_cached_sheetdata = false
+        }
+        // END FETCHER-1 Logic to fetch latest 20 changes from sheet
+
+        // filtering for the last sync
+        const oldest_modified_date = Number(response[response.length - 1][0]);
+        const latest_modified_date = Number(response[1][0])
+        const last_synced_at = last_sync ? Number(last_sync) : 0;
+
+        if (latest_modified_date === last_synced_at) {
+            response = response.slice(0, 1);
+            all_synced = true;
+        }
+
+        else if (last_synced_at < oldest_modified_date) {
+            // fetch whole sheet
+            console.log(`fetching full sheet ${last_synced_at} < ${oldest_modified_date}`)
+
+            const last_col_number_int = parseInt(last_col_number, 10)
+            const db_start_col = columnNumberToLetter(last_col_number_int + 2)
+            const db_end_col = columnNumberToLetter(last_col_number_int + 1 + last_col_number_int)
+            const range = `${sheet}!${db_start_col}:${db_end_col}`;
+
+            response = await sheets.spreadsheets.values.get({
+                spreadsheetId,
+                range,
+            });
+            response = response.data.values;
+
+            is_fullfetch = true;
+        }
+
+        res.json({ data: response, all_synced, is_fullfetch, is_cached_colnum, is_cached_sheetdata, tokenUsed });
     } catch (err) {
-        console.error('❌ Error in GET /data:', err.message);
+        console.error('❌ Error in GET /db/get:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
 // POST /api/update?sheet=xyz
 // Body: { updates: [{ dbrow, dbcol, values }] }
-router.post('/update', async (req, res) => {
-    console.log("called /api/update... ")
+router.post('/db/update', async (req, res) => {
+    console.log("called /api/db/update................................................... ")
     try {
         const { workbook, sheet } = req.query;
 
@@ -93,10 +171,52 @@ router.post('/update', async (req, res) => {
     }
 });
 
+
 // POST /api/push?sheet=xyz
 // Body: { entries: [[...], [...]] } or array of arrays
-router.post('/push', async (req, res) => {
-    console.log("called /api/push... ")
+router.post('/db/insert-col', async (req, res) => {
+    console.log("called /api/db/insert-col... ")
+    try {
+        const { workbook, sheet_id } = req.query;
+        const { } = req.body;
+        if (!workbook || !sheet_id) {
+            return res.status(400).json({ error: 'Missing or invalid parameters' });
+        }
+
+        const spreadsheetId = getSheetId(workbook);
+        const { auth, tokenUsed } = getAuthWithDebug();
+
+        const sheets = google.sheets({ version: 'v4', auth });
+
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            requestBody: {
+                requests: [
+                    {
+                        insertDimension: {
+                            range: {
+                                sheetId: sheet_id,
+                                dimension: 'COLUMNS',
+                                startIndex: 4,
+                                endIndex: 5,
+                            },
+                            inheritFromBefore: false
+                        }
+                    }
+                ]
+            }
+        });
+
+
+        res.json({ success: true, tokenUsed });
+    } catch (err) {
+        console.error('❌ Error in POST /push:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/db/insert-row', async (req, res) => {
+    console.log("called /api/db/insert-row... ")
     try {
         const { workbook, sheet, last_col_letter } = req.query;
         const { entries } = req.body;
@@ -126,47 +246,3 @@ router.post('/push', async (req, res) => {
 });
 
 export default router;
-
-
-
-
-// GET /api/data?sheet=alias&last_sync=timestamp
-// router.get('/data', async (req, res) => {
-//     try {
-//         const sheetAlias = req.query.sheet;
-//         const lastSync = req.query.last_sync;
-
-//         if (!sheetAlias) {
-//             return res.status(400).json({ error: 'Missing sheet alias' });
-//         }
-
-//         const spreadsheetId = getSheetId(sheetAlias);
-//         const auth = getNextAuth();
-//         const sheets = google.sheets({ version: 'v4', auth });
-
-//         const range = 'Sheet1!A1:C5'; // assuming headers in row 1
-
-//         const response = await sheets.spreadsheets.values.get({
-//             spreadsheetId,
-//             range,
-//         });
-
-//         const rows = response.data.values || [];
-
-//         // Optional: filter based on last_sync timestamp (client does it for now)
-//         const data = rows.map((row) => ({
-//             version: row[0],
-//             last_modified: row[1],
-//             data: row[2],
-//             metadata: row[3],
-//             status: row[4],
-//             id: row[5], // assuming ID in column F
-//         }));
-
-//         res.json({ rows: data });
-//     } catch (err) {
-//         console.error('❌ Error in GET /data:', err.message);
-//         res.status(500).json({ error: err.message });
-//     }
-// });
-
