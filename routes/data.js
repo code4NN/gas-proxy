@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { json } from 'express';
 import { google } from 'googleapis';
 import { getNextAuth } from '../lib/serviceAccountPool.js';
 import { getSheetId } from '../lib/sheetMap.js';
@@ -37,7 +37,6 @@ router.get("/pong", async (req, res) => {
 // sheet
 // -----------------optional
 // last_sync: UNIX timestamp returns full sheet if empty or older than 20 updates
-// 
 router.get('/db/get', async (req, res) => {
     console.log("called /api/db/get................................................... ")
     try {
@@ -135,40 +134,152 @@ router.get('/db/get', async (req, res) => {
     }
 });
 
-// POST /api/update?sheet=xyz
-// Body: { updates: [{ dbrow, dbcol, values }] }
+
+// POST
+// -----------------must have
+// workbook
+// sheet
+// ----------------- in the body
+// { updates: [{ dbrow, dbcol, value, last_modified, expectedVersion }] }
+// value must be {} with keys 
+// 
+// a: age (version)
+// v: value
+// 
 router.post('/db/update', async (req, res) => {
     console.log("called /api/db/update................................................... ")
     try {
         const { workbook, sheet } = req.query;
-
         const { updates } = req.body;
+
         if (!workbook || !sheet || !updates || !Array.isArray(updates)) {
-            return res.status(400).json({ error: `Missing or invalid parameters ${updates}` });
+            return res.status(400).json({ error: `Missing or invalid parameters` });
         }
 
         const spreadsheetId = getSheetId(workbook);
         const { auth, tokenUsed } = getAuthWithDebug();
-        const sheets = google.sheets({ version: 'v4', auth });
+        const sheetsApi = google.sheets({ version: 'v4', auth });
 
-        const data = updates.map(update => ({
-            range: `${sheet}!${update.dbcol}${update.dbrow}`,
-            values: [[update.value]],
-        }));
+        // Fetch current cell values for all update targets
+        const ranges = updates.map(u => `${sheet}!${u.dbcol}${u.dbrow}`);
 
-        await sheets.spreadsheets.values.batchUpdate({
+        const batchRes = await sheetsApi.spreadsheets.values.batchGet({
             spreadsheetId,
-            requestBody: {
-                valueInputOption: 'RAW',
-                data,
-            },
+            ranges
         });
 
-        res.json({ success: true, updated: updates.length, tokenUsed });
+        const valueRanges = batchRes.data.valueRanges || [];
+
+        const results = updates.map((update, i) => {
+            const cell = valueRanges[i]?.values?.[0]?.[0] || ''; // empty -> ''
+
+            // Assume cell is stored like: "123|data" where "123" is version
+            const currentVersion = cell === '' ? 0 : JSON.parse(cell)['a'];
+            if ((parseInt(update.expectedVersion,10) + 1) !== parseInt(update.value['a'],10)) {
+                return {
+                    update,
+                    status: 'conflict',
+                    target_version: update.expectedVersion,
+                    payload_version: update.value['a']
+                }
+            }
+            else if (Number(currentVersion) === Number(update.expectedVersion)) {
+                return { update, status: 'ok' };
+            } else {
+                return {
+                    update,
+                    status: 'conflict',
+                    currentValue: cell,
+                    currentVersion
+                };
+            }
+        });
+
+        // Separate successful updates from conflicts
+        const okUpdates = results.filter(r => r.status === 'ok').map(r => r.update);
+        const conflicts = results.filter(r => r.status === 'conflict');
+
+        // Perform batch update only for OK updates
+        const rowTimestamps = {};
+
+        // Build the update requests for changed cells
+        const batchData = okUpdates.map(update => {
+            const row = parseInt(update.dbrow, 10);
+
+            // Track the latest timestamp for this row
+            const ts = parseInt(update.last_modified, 10); // assuming it's numeric UNIX timestamp
+            if (!rowTimestamps[row] || ts > rowTimestamps[row]) {
+                rowTimestamps[row] = ts;
+            }
+
+            return {
+                range: `${sheet}!${update.dbcol}${row}`,
+                values: [[JSON.stringify(update.value)]]
+            };
+        });
+
+        // Add updates for the last_modified column (A) for each affected row
+        Object.entries(rowTimestamps).forEach(([row, ts]) => {
+            batchData.push({
+                range: `${sheet}!A${row}`,
+                values: [[ts]]
+            });
+        });
+
+        // Send all updates in a single batch
+        if (batchData.length > 0) {
+            await sheetsApi.spreadsheets.values.batchUpdate({
+                spreadsheetId,
+                requestBody: {
+                    valueInputOption: 'RAW',
+                    data: batchData
+                }
+            });
+        }
+
+        // Return conflict info
+        res.json({
+            updatedCount: okUpdates.length,
+            conflicts,
+            tokenUsed
+        });
+
+
     } catch (err) {
-        console.error('❌ Error in POST /update:', err.message);
+        console.error(err);
         res.status(500).json({ error: err.message });
     }
+
+    // try {
+    //     const { workbook, sheet } = req.query;
+
+    //     const { updates } = req.body;
+    //     if (!workbook || !sheet || !updates || !Array.isArray(updates)) {
+    //         return res.status(400).json({ error: `Missing or invalid parameters ${updates}` });
+    //     }
+
+    //     const spreadsheetId = getSheetId(workbook);
+    //     const { auth, tokenUsed } = getAuthWithDebug();
+    //     const sheets = google.sheets({ version: 'v4', auth });
+
+    //     const data = updates.map(update => ({
+    //         range: `${sheet}!${update.dbcol}${update.dbrow}`,
+    //         values: [[update.value]],
+    //     }));
+
+    //     await sheets.spreadsheets.values.batchUpdate({
+    //         spreadsheetId,
+    //         requestBody: {
+    //             valueInputOption: 'RAW',
+    //             data,
+    //         },
+    //     });
+
+    //     res.json({ success: true, updated: updates.length, tokenUsed });
+    // } catch (err) {
+    //     console.error('❌ Error in POST /update:', err.message);
+    //     res.status(500).json({ error: err.message });
+    // }
 });
 
 
