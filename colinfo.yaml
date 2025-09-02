@@ -1,0 +1,59 @@
+# =========================
+# Table-level metadata
+# =========================
+name:                # table name
+created_at:          # ISO datetime when schema was created/updated
+description:         # optional description of the table
+
+# =========================
+# Column definitions
+# =========================
+colinfo:
+  - name:            # column name
+    dtype:           # one of [int, float, date, dtime, cat, text, formula]
+
+    # ---------------------
+    # Validation constraints
+    # ---------------------
+    constraints:
+      min:           # (int/float/date) minimum allowed value
+      max:           # (int/float/date) maximum allowed value
+      max_char:      # (text) maximum characters
+      regex:         # (text) regex for pattern validation
+      options:       # (cat) categorical values list
+        - value:     # option value stored in DB
+          bgC:       # background color (UI hint)
+          tC:        # text color (UI hint)
+
+    # ---------------------
+    # Column behavior
+    # ---------------------
+    default:         # default value if not provided
+    formula:         # (formula dtype) expression for derived values
+    nullable:        # true/false → can the value be empty?
+    unique:          # true/false → must all values be unique?
+    immutable:       # true/false → editable only at creation?
+    primary_key:     # true/false → is this the primary identifier?
+
+    # ---------------------
+    # Joins (for relational lookups)
+    # ---------------------
+    join:
+      local_key:     # column in this table (e.g. customer_id)
+      foreign_table: # target table name (e.g. customers)
+      foreign_key:   # column in foreign table (e.g. id)
+      select:        # column to pull back (e.g. name)
+
+    # ---------------------
+    # Display / UI formatting
+    # ---------------------
+    format:
+      display:       # e.g. currency, percent, date, plain
+      precision:     # for float: number of decimal places
+
+    # ---------------------
+    # Permissions (optional)
+    # ---------------------
+    permissions:
+      read:          # list of roles allowed to read (e.g. [user, admin])
+      write:         # list of roles allowed to write (e.g. [admin])
