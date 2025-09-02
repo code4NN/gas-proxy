@@ -293,14 +293,14 @@ router.post('/db/insert-col', async (req, res) => {
 
         // ================================================
         // ==================  Fetch the fresh sheetID and last column number
-        const res = await sheets.spreadsheets.get({
+        const id_res = await sheets.spreadsheets.get({
             spreadsheetId,
             ranges: [`${sheet}!1:1`],       // fetch first row values
             includeGridData: true,              // actually return cell values
             fields: "sheets.properties,sheets.data.rowData.values.formattedValue"
         });
 
-        const target_sheet = res.data.sheets.find(
+        const target_sheet = id_res.data.sheets.find(
             s => s.properties.title === sheet
         );
 
